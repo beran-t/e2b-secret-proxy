@@ -17,7 +17,7 @@ Tests:
 4. Token enforcement (no valid X-Sandbox-Id = no injection)
 
 Usage:
-    source .venv/bin/activate && python test-two-sandbox.py
+    source .venv/bin/activate && python test-integration.py
 """
 
 import json

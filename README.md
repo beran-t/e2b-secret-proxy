@@ -42,7 +42,7 @@ E2B_API_KEY=<your-key> python build-template.py
 ### 3. Run the tests
 
 ```bash
-E2B_API_KEY=<your-key> python test-two-sandbox.py
+E2B_API_KEY=<your-key> python test-integration.py
 ```
 
 ## Usage
@@ -139,5 +139,5 @@ The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_C
 | `secret-proxy.js` | The proxy server (Node.js, zero dependencies) |
 | `start-proxy.sh` | Boot wrapper for E2B template |
 | `build-template.py` | Builds the E2B sandbox template |
-| `test-two-sandbox.py` | Integration test (4 tests) |
+| `test-integration.py` | Integration test (4 tests) |
 | `example-usage.py` | Example with OpenAI API |
