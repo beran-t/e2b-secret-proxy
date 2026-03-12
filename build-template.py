@@ -11,7 +11,7 @@ from e2b import Template, wait_for_port, default_build_logger
 
 template = (
     Template()
-    .from_template("egress-header-template")
+    .from_node_image("22")
     .copy_items([
         {"src": "./secret-proxy.js", "dest": "/opt/proxy/secret-proxy.js"},
         {"src": "./start-proxy.sh", "dest": "/opt/proxy/start-proxy.sh"},

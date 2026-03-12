@@ -1,25 +1,26 @@
-# E2B Secret Proxy
+# Secret Proxy
 
-An HTTP proxy that injects auth headers into outgoing requests from [E2B](https://e2b.dev) sandboxes. Sandbox code uses mock/placeholder tokens — the proxy rewrites them with real secrets. Secrets never appear in user code, LLM-generated code, or application logs.
+An HTTP proxy that injects auth headers into outgoing requests from E2B sandboxes. Secrets live only in the proxy — sandbox user code never sees them.
 
-## How It Works
+## Architecture
+
+Two sandboxes work together:
 
 ```
-Sandbox Code                     Proxy                          Target API
-     |                            |                                |
-     |-- GET /v1/models --------->|                                |
-     |   Authorization: MOCK      |                                |
-     |                            |-- rewrite Authorization ------>|
-     |                            |   Authorization: Bearer sk-... |
-     |                            |                                |
-     |<-- response ---------------|<-- response -------------------|
+App Sandbox (sandbox-egress-header)
+  |  curl https://proxy-url/proxy/http/api.openai.com/v1/models
+  |  [egress adds X-Sandbox-Id automatically]
+  v
+Proxy Sandbox (secret-proxy, port 3128 exposed)
+  |  verify X-Sandbox-Id → inject secret headers → strip X-Sandbox-Id
+  v
+Target API (api.openai.com)
 ```
 
-1. Proxy starts on `localhost:3128` when the sandbox boots
-2. After sandbox creation, you write the proxy config with real secrets via `sandbox.files.write()`
-3. Sandbox code makes HTTP requests through the proxy (using `-x http://localhost:3128`)
-4. Proxy matches the target host against configured rules and injects/overwrites headers
-5. Response is piped back to the sandbox unchanged
+1. **Proxy sandbox** runs the secret proxy, exposed via public URL (`get_host(3128)`)
+2. **App sandbox** uses `sandbox-egress-header` template, which auto-injects `X-Sandbox-Id` on all outgoing requests
+3. App sends requests to the proxy URL using reverse proxy mode: `/proxy/http/{host}/{path}`
+4. Proxy verifies `X-Sandbox-Id` matches the configured token, injects secret headers, strips `X-Sandbox-Id`, and forwards
 
 ## Quick Start
 
@@ -41,16 +42,12 @@ E2B_API_KEY=<your-key> python build-template.py
 ### 3. Run the tests
 
 ```bash
+# Two-sandbox test (with token verification via X-Sandbox-Id)
+E2B_API_KEY=<your-key> python test-two-sandbox.py
+
+# Single-sandbox test (basic proxy functionality)
 E2B_API_KEY=<your-key> python test-integration.py
 ```
-
-This creates a sandbox, configures the proxy, and runs 3 tests:
-
-| Test | What it checks |
-|------|---------------|
-| 1 | Headers injected for matching host |
-| 2 | Mock secret gets overwritten with real secret |
-| 3 | Non-matching host passes through unchanged |
 
 ## Usage
 
@@ -58,10 +55,16 @@ This creates a sandbox, configures the proxy, and runs 3 tests:
 import json, time
 from e2b_code_interpreter import Sandbox
 
-sandbox = Sandbox.create(template="secret-proxy", timeout=120)
+# 1. Create proxy sandbox and get its public URL
+proxy = Sandbox.create(template="secret-proxy", timeout=120)
+proxy_url = f"https://{proxy.get_host(3128)}"
 
-# Write config — proxy auto-detects within ~2s
-sandbox.files.write("/etc/proxy/config.json", json.dumps({
+# 2. Create app sandbox (egress template adds X-Sandbox-Id automatically)
+app = Sandbox.create(template="sandbox-egress-header", timeout=120)
+
+# 3. Configure proxy — use app sandbox's ID as verification token
+proxy.files.write("/etc/proxy/config.json", json.dumps({
+    "token": app.sandbox_id,
     "rules": [{
         "match": "api.openai.com",
         "headers": {"Authorization": "Bearer sk-real-secret-key"}
@@ -69,20 +72,43 @@ sandbox.files.write("/etc/proxy/config.json", json.dumps({
 }))
 time.sleep(3)
 
-# Sandbox code uses a mock token — proxy rewrites it
-result = sandbox.commands.run(
-    'curl -s -x http://localhost:3128 '
-    '-H "Authorization: Bearer MOCK" '
-    'http://api.openai.com/v1/models'
+# 4. App code uses the API — proxy injects real key
+result = app.commands.run(
+    f'curl -s -H "Authorization: Bearer MOCK" '
+    f'{proxy_url}/proxy/http/api.openai.com/v1/models'
 )
 print(result.stdout)
-sandbox.kill()
+
+app.kill()
+proxy.kill()
 ```
+
+## Proxy Modes
+
+The proxy supports two modes simultaneously:
+
+### Forward proxy (single-sandbox, localhost)
+
+```bash
+curl -x http://localhost:3128 http://httpbin.org/headers
+```
+
+Standard HTTP forward proxy. Use when the proxy runs in the same sandbox.
+
+### Reverse proxy (two-sandbox, public URL)
+
+```bash
+curl https://proxy-url/proxy/http/httpbin.org/headers
+curl https://proxy-url/proxy/https/api.openai.com/v1/models
+```
+
+Target URL is encoded in the path: `/proxy/{http|https}/{host}/{path}`. Use when the proxy runs in a separate sandbox accessed via `get_host()`.
 
 ## Config Format
 
 ```json
 {
+  "token": "app-sandbox-id",
   "rules": [
     {
       "match": "api.openai.com",
@@ -96,21 +122,9 @@ sandbox.kill()
 }
 ```
 
+- **`token`** (optional) — if set, requests must include `X-Sandbox-Id` header matching this value. The `sandbox-egress-header` template adds this automatically.
 - **`match`** — glob pattern for the target hostname (`*` = one segment, `**` = any depth)
 - **`headers`** — injected into (or overwrite) the outgoing request headers
-
-### Optional: Token Verification
-
-Add a `token` field to require requests to include a matching `X-Sandbox-Id` header before secrets are injected:
-
-```json
-{
-  "token": "sandbox-id-or-shared-secret",
-  "rules": [...]
-}
-```
-
-Unverified requests pass through without header injection (no secrets leaked). The `X-Sandbox-Id` header is stripped before forwarding.
 
 ### Glob Pattern Syntax
 
@@ -123,18 +137,14 @@ Unverified requests pass through without header injection (no secrets leaked). T
 
 ### Config Loading
 
-The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_CONFIG` env var. It polls the config file every 2 seconds and auto-reloads when it changes. You can also send `SIGHUP` to force a reload.
+The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_CONFIG` env var. It polls the config file every 2 seconds and auto-reloads when it changes.
 
-## HTTP vs HTTPS
+## Security Model
 
-Header injection only works for HTTP requests. HTTPS `CONNECT` tunnels pass through unchanged since the traffic is encrypted end-to-end.
-
-| Client URL | What happens |
-|------------|-------------|
-| `http://api.openai.com/...` | Proxy intercepts, injects headers, forwards |
-| `https://api.openai.com/...` via `HTTPS_PROXY` | `CONNECT` tunnel — no injection |
-
-**Recommendation**: Use `http://` URLs in sandbox code with `-x http://localhost:3128`. The proxy handles the upstream connection.
+- Secrets exist only in the proxy sandbox's config file — never in the app sandbox
+- `X-Sandbox-Id` verification ensures only the authorized app sandbox gets secret injection
+- The `X-Sandbox-Id` header is stripped before forwarding to target APIs
+- Requests without a valid token pass through without injection (no secrets leaked)
 
 ## Files
 
@@ -143,5 +153,6 @@ Header injection only works for HTTP requests. HTTPS `CONNECT` tunnels pass thro
 | `secret-proxy.js` | The proxy server (Node.js, zero dependencies) |
 | `start-proxy.sh` | Boot wrapper for E2B template |
 | `build-template.py` | Builds the E2B sandbox template |
-| `test-integration.py` | 3 end-to-end tests against httpbin.org |
+| `test-two-sandbox.py` | Two-sandbox integration test (4 tests) |
+| `test-integration.py` | Single-sandbox integration test (3 tests) |
 | `example-usage.py` | Example with OpenAI API |

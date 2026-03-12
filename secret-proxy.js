@@ -7,6 +7,7 @@ const fs = require('fs');
 const { URL } = require('url');
 
 const PORT = parseInt(process.env.PROXY_PORT || '3128', 10);
+const LISTEN_HOST = process.env.PROXY_LISTEN_HOST || '0.0.0.0';
 const CONFIG_FILE = '/etc/proxy/config.json';
 const CONFIG_POLL_MS = 2000; // Check for config file changes every 2s
 
@@ -196,16 +197,40 @@ function logError(host, err) {
   console.error(`[${ts}] ERROR ${host}: ${err.message}`);
 }
 
-// --- HTTP forward proxy ---
+// --- Parse target URL from request ---
+// Supports two modes:
+// 1. Forward proxy: GET http://httpbin.org/headers (absolute URL)
+// 2. Reverse proxy: GET /proxy/http/hostname/path or /proxy/https/hostname/path
+//    Used when proxy is accessed via E2B public URL (get_host)
+
+function parseTargetUrl(reqUrl) {
+  // Mode 1: Forward proxy — absolute URL
+  try {
+    const url = new URL(reqUrl);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url;
+  } catch {}
+
+  // Mode 2: Reverse proxy — /proxy/{scheme}/{host}/{path}
+  const m = reqUrl.match(/^\/proxy\/(https?)\/([-a-zA-Z0-9.]+)(\/.*)?$/);
+  if (m) {
+    const scheme = m[1];
+    const host = m[2];
+    const path = m[3] || '/';
+    try {
+      return new URL(`${scheme}://${host}${path}`);
+    } catch {}
+  }
+
+  return null;
+}
+
+// --- HTTP proxy server ---
 
 const server = http.createServer((clientReq, clientRes) => {
-  let targetUrl;
-  try {
-    targetUrl = new URL(clientReq.url);
-  } catch {
-    // Not an absolute URL — could be a relative request to the proxy itself
+  const targetUrl = parseTargetUrl(clientReq.url);
+  if (!targetUrl) {
     clientRes.writeHead(400);
-    clientRes.end('Bad Request: proxy expects absolute URLs');
+    clientRes.end('Bad Request: use absolute URL or /proxy/{http|https}/{host}/{path}');
     return;
   }
 
@@ -296,7 +321,7 @@ process.on('SIGINT', shutdown);
 
 // --- Start ---
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[secret-proxy] Listening on 127.0.0.1:${PORT}`);
+server.listen(PORT, LISTEN_HOST, () => {
+  console.log(`[secret-proxy] Listening on ${LISTEN_HOST}:${PORT}`);
   console.log('[secret-proxy] Ready (watching for config file changes)');
 });

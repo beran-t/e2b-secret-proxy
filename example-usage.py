@@ -1,9 +1,11 @@
 """
-Example: Using the secret proxy sandbox to make authenticated API calls
-without exposing secrets to user code.
+Example: Two-sandbox architecture for secret proxy.
 
-The sandbox code sends requests with mock/placeholder tokens. The proxy
-intercepts them and rewrites the headers with real secrets.
+Sandbox 1 (proxy): Runs the secret proxy, exposed via public URL.
+Sandbox 2 (app): User code runs here, sends requests to proxy URL.
+
+The app sandbox's egress template injects X-Sandbox-Id into all outgoing
+requests. The proxy verifies this before injecting secrets.
 
 Usage:
     E2B_API_KEY=... OPENAI_API_KEY=... python proxy/example-usage.py
@@ -14,43 +16,42 @@ import os
 import time
 from e2b_code_interpreter import Sandbox
 
-# Define proxy rules — map target hosts to real secret headers.
-# When sandbox code hits api.openai.com, the proxy injects the real key.
-proxy_config = {
-    "rules": [
-        {
-            "match": "api.openai.com",
-            "headers": {
-                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-            },
-        },
-    ],
-}
+OPENAI_KEY = os.environ["OPENAI_API_KEY"]
 
-# Create sandbox from the proxy template
-sandbox = Sandbox.create(
-    template="secret-proxy",
-    timeout=300,
-)
-print("Sandbox created:", sandbox.sandbox_id)
+# 1. Create proxy sandbox and get its public URL
+proxy_sandbox = Sandbox.create(template="secret-proxy", timeout=300)
+proxy_host = proxy_sandbox.get_host(3128)
+proxy_url = f"https://{proxy_host}"
+print(f"Proxy sandbox: {proxy_sandbox.sandbox_id}")
+print(f"Proxy URL: {proxy_url}")
 
-# Write the config — the proxy picks it up automatically within ~2 seconds
-sandbox.files.write("/etc/proxy/config.json", json.dumps(proxy_config))
+# 2. Create app sandbox (sandbox-egress-header injects X-Sandbox-Id)
+app_sandbox = Sandbox.create(template="sandbox-egress-header", timeout=300)
+print(f"App sandbox: {app_sandbox.sandbox_id}")
+
+# 3. Configure proxy with app sandbox's ID as token
+proxy_sandbox.files.write("/etc/proxy/config.json", json.dumps({
+    "token": app_sandbox.sandbox_id,
+    "rules": [{
+        "match": "api.openai.com",
+        "headers": {"Authorization": f"Bearer {OPENAI_KEY}"},
+    }],
+}))
 time.sleep(3)
 
 try:
-    # Sandbox code sends a request with a MOCK token.
-    # The proxy rewrites Authorization to the real OpenAI key.
-    result = sandbox.commands.run(
-        'curl -s -x http://localhost:3128 '
-        '-H "Authorization: Bearer MOCK_KEY" '
-        'http://api.openai.com/v1/models | head -c 300',
+    # App code uses the API with a mock key — proxy rewrites it
+    result = app_sandbox.commands.run(
+        f'curl -s '
+        f'-H "Authorization: Bearer MOCK_KEY" '
+        f'{proxy_url}/proxy/http/api.openai.com/v1/models | head -c 300',
         timeout=30,
     )
-    print("Response (first 300 chars):", result.stdout)
+    print("Response:", result.stdout)
     if result.stderr:
         print("Stderr:", result.stderr)
 
 finally:
-    sandbox.kill()
-    print("Sandbox killed.")
+    app_sandbox.kill()
+    proxy_sandbox.kill()
+    print("Both sandboxes killed.")
