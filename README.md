@@ -120,7 +120,7 @@ This demo runs the proxy **inside** the sandbox for simplicity. In production, t
 └─────────────┘  ├───→│ Secret Proxy │────→│ Target APIs │
 ┌─────────────┐  │    │ (standalone) │     └─────────────┘
 │  Sandbox B  │──┘    └──────────────┘
-│  (no secrets)│           │
+│ (no secrets)│           │
 └─────────────┘      Verifies sandbox ID,
                      injects per-sandbox secrets
 ```
