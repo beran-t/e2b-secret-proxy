@@ -42,11 +42,7 @@ E2B_API_KEY=<your-key> python build-template.py
 ### 3. Run the tests
 
 ```bash
-# Two-sandbox test (with token verification via X-Sandbox-Id)
 E2B_API_KEY=<your-key> python test-two-sandbox.py
-
-# Single-sandbox test (basic proxy functionality)
-E2B_API_KEY=<your-key> python test-integration.py
 ```
 
 ## Usage
@@ -83,26 +79,16 @@ app.kill()
 proxy.kill()
 ```
 
-## Proxy Modes
+## URL Format
 
-The proxy supports two modes simultaneously:
-
-### Forward proxy (single-sandbox, localhost)
-
-```bash
-curl -x http://localhost:3128 http://httpbin.org/headers
-```
-
-Standard HTTP forward proxy. Use when the proxy runs in the same sandbox.
-
-### Reverse proxy (two-sandbox, public URL)
+Target URL is encoded in the request path:
 
 ```bash
 curl https://proxy-url/proxy/http/httpbin.org/headers
 curl https://proxy-url/proxy/https/api.openai.com/v1/models
 ```
 
-Target URL is encoded in the path: `/proxy/{http|https}/{host}/{path}`. Use when the proxy runs in a separate sandbox accessed via `get_host()`.
+Pattern: `/proxy/{http|https}/{host}/{path}`
 
 ## Config Format
 
@@ -153,6 +139,5 @@ The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_C
 | `secret-proxy.js` | The proxy server (Node.js, zero dependencies) |
 | `start-proxy.sh` | Boot wrapper for E2B template |
 | `build-template.py` | Builds the E2B sandbox template |
-| `test-two-sandbox.py` | Two-sandbox integration test (4 tests) |
-| `test-integration.py` | Single-sandbox integration test (3 tests) |
+| `test-two-sandbox.py` | Integration test (4 tests) |
 | `example-usage.py` | Example with OpenAI API |

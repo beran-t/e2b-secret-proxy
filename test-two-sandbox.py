@@ -100,10 +100,11 @@ try:
         assert result.stdout.strip() in ("200", "301", "302"), f"Unexpected: {result.stdout}"
         print("PASS: Non-matching host passed through")
 
-        # Test 4: Token enforcement — request from proxy sandbox (no X-Sandbox-Id)
+        # Test 4: Token enforcement — request without valid X-Sandbox-Id
+        # Use curl from proxy sandbox (no egress header) via its own localhost
         print("\n--- Test 4: Token enforcement ---")
         result = proxy_sandbox.commands.run(
-            "curl -s -x http://localhost:3128 http://httpbin.org/headers",
+            "curl -s http://localhost:3128/proxy/http/httpbin.org/headers",
             timeout=30,
         )
         print("Response:", result.stdout[:500])

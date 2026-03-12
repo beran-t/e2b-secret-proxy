@@ -2,7 +2,6 @@
 
 const http = require('http');
 const https = require('https');
-const net = require('net');
 const fs = require('fs');
 const { URL } = require('url');
 
@@ -187,30 +186,16 @@ function log(method, host, path, injected, verified) {
   console.log(`[${ts}] ${parts.join(' ')}`);
 }
 
-function logConnect(host, port) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] CONNECT ${host}:${port} -> tunnel (no injection)`);
-}
-
 function logError(host, err) {
   const ts = new Date().toISOString();
   console.error(`[${ts}] ERROR ${host}: ${err.message}`);
 }
 
-// --- Parse target URL from request ---
-// Supports two modes:
-// 1. Forward proxy: GET http://httpbin.org/headers (absolute URL)
-// 2. Reverse proxy: GET /proxy/http/hostname/path or /proxy/https/hostname/path
-//    Used when proxy is accessed via E2B public URL (get_host)
+// --- Parse target URL from request path ---
+// Reverse proxy mode: GET /proxy/{http|https}/{host}/{path}
+// Accessed via E2B public URL (get_host)
 
 function parseTargetUrl(reqUrl) {
-  // Mode 1: Forward proxy — absolute URL
-  try {
-    const url = new URL(reqUrl);
-    if (url.protocol === 'http:' || url.protocol === 'https:') return url;
-  } catch {}
-
-  // Mode 2: Reverse proxy — /proxy/{scheme}/{host}/{path}
   const m = reqUrl.match(/^\/proxy\/(https?)\/([-a-zA-Z0-9.]+)(\/.*)?$/);
   if (m) {
     const scheme = m[1];
@@ -220,17 +205,16 @@ function parseTargetUrl(reqUrl) {
       return new URL(`${scheme}://${host}${path}`);
     } catch {}
   }
-
   return null;
 }
 
-// --- HTTP proxy server ---
+// --- HTTP server ---
 
 const server = http.createServer((clientReq, clientRes) => {
   const targetUrl = parseTargetUrl(clientReq.url);
   if (!targetUrl) {
     clientRes.writeHead(400);
-    clientRes.end('Bad Request: use absolute URL or /proxy/{http|https}/{host}/{path}');
+    clientRes.end('Bad Request: use /proxy/{http|https}/{host}/{path}');
     return;
   }
 
@@ -250,8 +234,6 @@ const server = http.createServer((clientReq, clientRes) => {
 
   // Build outgoing headers
   const outHeaders = { ...clientReq.headers };
-  delete outHeaders['proxy-connection'];
-  delete outHeaders['proxy-authorization'];
   delete outHeaders['x-sandbox-id']; // Strip token before forwarding
   outHeaders.host = targetUrl.host;
   Object.assign(outHeaders, injectHeaders);
@@ -284,28 +266,6 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.pipe(proxyReq, { end: true });
 });
 
-// --- CONNECT tunneling (HTTPS passthrough, no injection) ---
-
-server.on('connect', (clientReq, clientSocket, head) => {
-  const [hostname, portStr] = clientReq.url.split(':');
-  const port = parseInt(portStr, 10) || 443;
-
-  logConnect(hostname, port);
-
-  const targetSocket = net.connect(port, hostname, () => {
-    clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-    if (head.length > 0) targetSocket.write(head);
-    targetSocket.pipe(clientSocket);
-    clientSocket.pipe(targetSocket);
-  });
-
-  targetSocket.on('error', (err) => {
-    logError(hostname + ':' + port, err);
-    clientSocket.end();
-  });
-
-  clientSocket.on('error', () => targetSocket.destroy());
-});
 
 // --- Graceful shutdown ---
 
