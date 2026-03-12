@@ -4,80 +4,16 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const { URL } = require('url');
+const { minimatch } = require('minimatch');
 
 const PORT = parseInt(process.env.PROXY_PORT || '3128', 10);
 const LISTEN_HOST = process.env.PROXY_LISTEN_HOST || '0.0.0.0';
 const CONFIG_FILE = '/etc/proxy/config.json';
 const CONFIG_POLL_MS = 2000; // Check for config file changes every 2s
 
-// --- Glob matching ---
+// --- Glob matching options ---
 
-function globToRegex(pattern) {
-  let regex = '';
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === '*') {
-      if (pattern[i + 1] === '*') {
-        regex += '.*';
-        i += 2;
-        if (pattern[i] === '.') { i++; regex += '\\.'; } // skip dot after **
-        continue;
-      }
-      regex += '[^.]*';
-      i++;
-    } else if (ch === '?') {
-      regex += '[^.]';
-      i++;
-    } else if ('.+^${}()|[]\\'.includes(ch)) {
-      regex += '\\' + ch;
-      i++;
-    } else {
-      regex += ch;
-      i++;
-    }
-  }
-  return new RegExp('^' + regex + '$', 'i');
-}
-
-// --- Self-test mode ---
-
-if (process.argv.includes('--test')) {
-  const assert = (cond, msg) => {
-    if (!cond) { console.error('FAIL:', msg); process.exit(1); }
-    console.log('  PASS:', msg);
-  };
-
-  console.log('Running glob matching tests...\n');
-
-  // Exact match
-  assert(globToRegex('api.openai.com').test('api.openai.com'), 'exact match');
-  assert(!globToRegex('api.openai.com').test('other.openai.com'), 'exact no match');
-
-  // Single wildcard
-  assert(globToRegex('*.openai.com').test('api.openai.com'), '*.openai.com matches api.openai.com');
-  assert(!globToRegex('*.openai.com').test('api.v2.openai.com'), '*.openai.com does not match api.v2.openai.com');
-  assert(globToRegex('*.openai.com').test('chat.openai.com'), '*.openai.com matches chat.openai.com');
-
-  // Double wildcard
-  assert(globToRegex('**.openai.com').test('api.openai.com'), '**.openai.com matches api.openai.com');
-  assert(globToRegex('**.openai.com').test('api.v2.openai.com'), '**.openai.com matches api.v2.openai.com');
-
-  // Case insensitivity
-  assert(globToRegex('API.OpenAI.com').test('api.openai.com'), 'case insensitive');
-  assert(globToRegex('api.openai.com').test('API.OPENAI.COM'), 'case insensitive reverse');
-
-  // Question mark
-  assert(globToRegex('api?.openai.com').test('api1.openai.com'), '? matches single char');
-  assert(!globToRegex('api?.openai.com').test('api12.openai.com'), '? does not match two chars');
-
-  // Full wildcard
-  assert(globToRegex('*.amazonaws.com').test('s3.amazonaws.com'), '*.amazonaws.com matches s3');
-  assert(globToRegex('*.amazonaws.com').test('dynamodb.amazonaws.com'), '*.amazonaws.com matches dynamodb');
-
-  console.log('\nAll tests passed.');
-  process.exit(0);
-}
+const MATCH_OPTIONS = { nocase: true, dot: true };
 
 // --- Config loading ---
 
@@ -118,7 +54,6 @@ function compileRules(config) {
     if (!rule.headers || typeof rule.headers !== 'object') return null;
     return {
       pattern: rule.match,
-      regex: globToRegex(rule.match),
       headers: rule.headers,
       headerCount: Object.keys(rule.headers).length,
     };
@@ -169,7 +104,7 @@ function findMatchingHeaders(hostname) {
   const merged = {};
   let injected = false;
   for (const rule of compiledRules) {
-    if (rule.regex.test(hostname)) {
+    if (minimatch(hostname, rule.pattern, MATCH_OPTIONS)) {
       Object.assign(merged, rule.headers);
       injected = true;
     }

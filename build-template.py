@@ -13,7 +13,7 @@ template = (
     Template()
     .from_node_image("22")
     .copy("./secret-proxy.js", "/opt/proxy/secret-proxy.js")
-    .run_cmd("mkdir -p /etc/proxy", user="root")
+    .run_cmd(["mkdir -p /etc/proxy", "cd /opt/proxy && npm install minimatch"], user="root")
     .set_start_cmd("node /opt/proxy/secret-proxy.js", wait_for_port(3128))
 )
 
