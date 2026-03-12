@@ -136,7 +136,7 @@ The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_C
 
 | File | What it does |
 |------|-------------|
-| `secret-proxy.js` | The proxy server (Node.js, zero dependencies) |
+| `secret-proxy.js` | The proxy server (Node.js, uses [minimatch](https://www.npmjs.com/package/minimatch) for glob matching) |
 | `build-template.py` | Builds the E2B sandbox template |
 | `test-integration.py` | Integration test (4 tests) |
 | `example-usage.py` | Example with OpenAI API |
