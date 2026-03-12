@@ -81,8 +81,9 @@ if (process.argv.includes('--test')) {
 
 // --- Config loading ---
 
-// Mutable rules array — reloaded on SIGHUP or config file changes
+// Mutable state — reloaded on SIGHUP or config file changes
 let compiledRules = [];
+let requiredToken = null; // If set, requests must include X-Sandbox-Id header to get injection
 let lastConfigHash = '';
 
 function loadConfig() {
@@ -128,9 +129,13 @@ function reloadConfig(source) {
   const config = loadConfig();
   const newRules = compileRules(config);
   compiledRules = newRules;
+  requiredToken = (config && config.token) ? config.token : null;
   console.log(`[secret-proxy] ${source}: Loaded ${compiledRules.length} rule(s):`);
   for (const rule of compiledRules) {
     console.log(`[secret-proxy]   - ${rule.pattern} (injecting ${rule.headerCount} header(s))`);
+  }
+  if (requiredToken) {
+    console.log(`[secret-proxy]   Token verification: enabled (X-Sandbox-Id required)`);
   }
   if (compiledRules.length === 0) {
     console.log('[secret-proxy]   No rules configured, all requests pass through unchanged');
@@ -174,9 +179,11 @@ function findMatchingHeaders(hostname) {
 
 // --- Logging ---
 
-function log(method, host, path, injected) {
+function log(method, host, path, injected, verified) {
   const ts = new Date().toISOString();
-  console.log(`[${ts}] ${method} ${host}${path} -> injected=${injected}`);
+  const parts = [`${method} ${host}${path}`, `injected=${injected}`];
+  if (requiredToken) parts.push(`verified=${verified}`);
+  console.log(`[${ts}] ${parts.join(' ')}`);
 }
 
 function logConnect(host, port) {
@@ -207,17 +214,24 @@ const server = http.createServer((clientReq, clientRes) => {
   const isHttps = targetUrl.protocol === 'https:';
   const path = targetUrl.pathname + targetUrl.search;
 
-  // Find matching rules and get headers to inject
-  const { headers: injectHeaders, injected } = findMatchingHeaders(hostname);
+  // Verify token if required — only inject headers for verified requests
+  const clientToken = clientReq.headers['x-sandbox-id'];
+  const verified = !requiredToken || (clientToken === requiredToken);
+
+  // Find matching rules and get headers to inject (only if verified)
+  const { headers: injectHeaders, injected } = verified
+    ? findMatchingHeaders(hostname)
+    : { headers: {}, injected: false };
 
   // Build outgoing headers
   const outHeaders = { ...clientReq.headers };
   delete outHeaders['proxy-connection'];
   delete outHeaders['proxy-authorization'];
+  delete outHeaders['x-sandbox-id']; // Strip token before forwarding
   outHeaders.host = targetUrl.host;
   Object.assign(outHeaders, injectHeaders);
 
-  log(clientReq.method, hostname, path, injected);
+  log(clientReq.method, hostname, path, injected, verified);
 
   const transport = isHttps ? https : http;
   const proxyReq = transport.request(

@@ -6,7 +6,7 @@ The sandbox code sends requests with mock/placeholder tokens. The proxy
 intercepts them and rewrites the headers with real secrets.
 
 Usage:
-    E2B_API_KEY=... OPENAI_API_KEY=... python example-usage.py
+    E2B_API_KEY=... OPENAI_API_KEY=... python proxy/example-usage.py
 """
 
 import json
