@@ -116,7 +116,7 @@ This demo runs the proxy **inside** the sandbox for simplicity. In production, t
 ```
 ┌─────────────┐
 │  Sandbox A  │──┐
-│  (no secrets)│  │    ┌──────────────┐     ┌─────────────┐
+│ (no secrets)│  │    ┌──────────────┐     ┌─────────────┐
 └─────────────┘  ├───→│ Secret Proxy │────→│ Target APIs │
 ┌─────────────┐  │    │ (standalone) │     └─────────────┘
 │  Sandbox B  │──┘    └──────────────┘
