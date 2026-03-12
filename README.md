@@ -56,7 +56,7 @@ proxy = Sandbox.create(template="secret-proxy", timeout=120)
 proxy_url = f"https://{proxy.get_host(3128)}"
 
 # 2. Create app sandbox (egress template adds X-Sandbox-Id automatically)
-app = Sandbox.create(template="sandbox-egress-header", timeout=120)
+app = Sandbox.create(template="tomasberan/sandbox-egress-header", timeout=120)
 
 # 3. Configure proxy — use app sandbox's ID as verification token
 proxy.files.write("/etc/proxy/config.json", json.dumps({

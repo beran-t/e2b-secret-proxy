@@ -26,7 +26,7 @@ print(f"Proxy sandbox: {proxy_sandbox.sandbox_id}")
 print(f"Proxy URL: {proxy_url}")
 
 # 2. Create app sandbox (sandbox-egress-header injects X-Sandbox-Id)
-app_sandbox = Sandbox.create(template="sandbox-egress-header", timeout=300)
+app_sandbox = Sandbox.create(template="tomasberan/sandbox-egress-header", timeout=300)
 print(f"App sandbox: {app_sandbox.sandbox_id}")
 
 # 3. Configure proxy with app sandbox's ID as token

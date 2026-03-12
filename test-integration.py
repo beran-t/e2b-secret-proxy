@@ -40,7 +40,7 @@ try:
     # Step 2: Create app sandbox from sandbox-egress-header
     print("\nCreating app sandbox from sandbox-egress-header...")
     app_sandbox = Sandbox.create(
-        template="sandbox-egress-header",
+        template="tomasberan/sandbox-egress-header",
         timeout=120,
     )
     app_id = app_sandbox.sandbox_id
