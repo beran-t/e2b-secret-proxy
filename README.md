@@ -1,8 +1,6 @@
 # E2B Secret Proxy
 
-An HTTP proxy that injects auth headers into outgoing requests from [E2B](https://e2b.dev) sandboxes. Sandbox code uses mock/placeholder tokens — the proxy rewrites them with real secrets. Each sandbox is verified by its unique ID before secrets are injected.
-
-> **This repo is a working demo.** The proxy runs inside the sandbox for simplicity. In production, it would run as a standalone service (see [Production Architecture](#production-architecture)).
+An HTTP proxy that injects auth headers into outgoing requests from [E2B](https://e2b.dev) sandboxes. Sandbox code uses mock/placeholder tokens — the proxy rewrites them with real secrets. Secrets never appear in user code, LLM-generated code, or application logs.
 
 ## How It Works
 
@@ -11,19 +9,17 @@ Sandbox Code                     Proxy                          Target API
      |                            |                                |
      |-- GET /v1/models --------->|                                |
      |   Authorization: MOCK      |                                |
-     |   X-Sandbox-Id: abc123     |                                |
-     |                            |-- verify sandbox ID            |
      |                            |-- rewrite Authorization ------>|
      |                            |   Authorization: Bearer sk-... |
      |                            |                                |
      |<-- response ---------------|<-- response -------------------|
 ```
 
-1. Sandbox sends a request with a mock token and its sandbox ID
-2. Proxy verifies the sandbox ID matches the configured token
-3. If verified, proxy rewrites headers with real secrets and forwards
-4. If not verified, request passes through unchanged (no secrets leaked)
-5. The `X-Sandbox-Id` header is stripped before forwarding — the target API never sees it
+1. Proxy starts on `localhost:3128` when the sandbox boots
+2. After sandbox creation, you write the proxy config with real secrets via `sandbox.files.write()`
+3. Sandbox code makes HTTP requests through the proxy (using `-x http://localhost:3128`)
+4. Proxy matches the target host against configured rules and injects/overwrites headers
+5. Response is piped back to the sandbox unchanged
 
 ## Quick Start
 
@@ -48,15 +44,13 @@ E2B_API_KEY=<your-key> python build-template.py
 E2B_API_KEY=<your-key> python test-integration.py
 ```
 
-This creates a sandbox, configures the proxy with the sandbox ID as the verification token, and runs 5 tests:
+This creates a sandbox, configures the proxy, and runs 3 tests:
 
 | Test | What it checks |
 |------|---------------|
-| 1 | Correct sandbox ID → headers injected |
+| 1 | Headers injected for matching host |
 | 2 | Mock secret gets overwritten with real secret |
-| 3 | Wrong sandbox ID → secrets NOT injected |
-| 4 | Missing sandbox ID → secrets NOT injected |
-| 5 | Non-matching host → passes through unchanged |
+| 3 | Non-matching host passes through unchanged |
 
 ## Usage
 
@@ -66,22 +60,20 @@ from e2b_code_interpreter import Sandbox
 
 sandbox = Sandbox.create(template="secret-proxy", timeout=120)
 
-# Configure: use sandbox ID as verification token
+# Write config — proxy auto-detects within ~2s
 sandbox.files.write("/etc/proxy/config.json", json.dumps({
-    "token": sandbox.sandbox_id,
     "rules": [{
         "match": "api.openai.com",
         "headers": {"Authorization": "Bearer sk-real-secret-key"}
     }]
 }))
-time.sleep(3)  # proxy auto-detects config within ~2s
+time.sleep(3)
 
-# Sandbox code includes its ID — proxy verifies and injects real secret
+# Sandbox code uses a mock token — proxy rewrites it
 result = sandbox.commands.run(
-    f'curl -s -x http://localhost:3128 '
-    f'-H "X-Sandbox-Id: {sandbox.sandbox_id}" '
-    f'-H "Authorization: Bearer MOCK" '
-    f'http://api.openai.com/v1/models'
+    'curl -s -x http://localhost:3128 '
+    '-H "Authorization: Bearer MOCK" '
+    'http://api.openai.com/v1/models'
 )
 print(result.stdout)
 sandbox.kill()
@@ -91,7 +83,6 @@ sandbox.kill()
 
 ```json
 {
-  "token": "sandbox-id-or-any-secret",
   "rules": [
     {
       "match": "api.openai.com",
@@ -105,37 +96,45 @@ sandbox.kill()
 }
 ```
 
-- **`token`** (optional) — if set, requests must include `X-Sandbox-Id` header matching this value to get secrets injected. Unverified requests pass through without injection.
 - **`match`** — glob pattern for the target hostname (`*` = one segment, `**` = any depth)
 - **`headers`** — injected into (or overwrite) the outgoing request headers
 
-## Production Architecture
+### Optional: Token Verification
 
-This demo runs the proxy **inside** the sandbox for simplicity. In production, the proxy runs as a **separate service** between the sandboxes and the internet:
+Add a `token` field to require requests to include a matching `X-Sandbox-Id` header before secrets are injected:
 
-```
-┌─────────────┐
-│  Sandbox A  │──┐
-│ (no secrets)│  │    ┌──────────────┐     ┌─────────────┐
-└─────────────┘  ├───→│ Secret Proxy │────→│ Target APIs │
-┌─────────────┐  │    │ (standalone) │     └─────────────┘
-│  Sandbox B  │──┘    └──────────────┘
-│ (no secrets)│           │
-└─────────────┘      Verifies sandbox ID,
-                     injects per-sandbox secrets
+```json
+{
+  "token": "sandbox-id-or-shared-secret",
+  "rules": [...]
+}
 ```
 
-**What changes in production:**
-- The proxy runs on its own server (not inside a sandbox)
-- Each sandbox routes traffic through the proxy via `HTTP_PROXY` env var
-- The proxy config maps sandbox IDs to their specific secrets
-- Sandbox code includes `X-Sandbox-Id` in every request — the proxy uses this to look up which secrets to inject
-- The proxy strips `X-Sandbox-Id` before forwarding so target APIs never see it
+Unverified requests pass through without header injection (no secrets leaked). The `X-Sandbox-Id` header is stripped before forwarding.
 
-**What stays the same:**
-- The proxy code (`secret-proxy.js`) works as-is — just change the listen address from `127.0.0.1` to `0.0.0.0`
-- The config format is identical
-- The verification flow is identical
+### Glob Pattern Syntax
+
+| Pattern | Matches | Example |
+|---------|---------|---------|
+| `api.openai.com` | Exact hostname | `api.openai.com` only |
+| `*.openai.com` | Single subdomain segment | `api.openai.com`, `chat.openai.com` |
+| `**.openai.com` | Any depth of subdomains | `api.openai.com`, `api.v2.openai.com` |
+| `api?.example.com` | Single character wildcard | `api1.example.com` |
+
+### Config Loading
+
+The proxy reads config from `/etc/proxy/config.json` (preferred) or the `PROXY_CONFIG` env var. It polls the config file every 2 seconds and auto-reloads when it changes. You can also send `SIGHUP` to force a reload.
+
+## HTTP vs HTTPS
+
+Header injection only works for HTTP requests. HTTPS `CONNECT` tunnels pass through unchanged since the traffic is encrypted end-to-end.
+
+| Client URL | What happens |
+|------------|-------------|
+| `http://api.openai.com/...` | Proxy intercepts, injects headers, forwards |
+| `https://api.openai.com/...` via `HTTPS_PROXY` | `CONNECT` tunnel — no injection |
+
+**Recommendation**: Use `http://` URLs in sandbox code with `-x http://localhost:3128`. The proxy handles the upstream connection.
 
 ## Files
 
@@ -144,5 +143,5 @@ This demo runs the proxy **inside** the sandbox for simplicity. In production, t
 | `secret-proxy.js` | The proxy server (Node.js, zero dependencies) |
 | `start-proxy.sh` | Boot wrapper for E2B template |
 | `build-template.py` | Builds the E2B sandbox template |
-| `test-integration.py` | 5 end-to-end tests against httpbin.org |
+| `test-integration.py` | 3 end-to-end tests against httpbin.org |
 | `example-usage.py` | Example with OpenAI API |

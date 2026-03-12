@@ -2,15 +2,16 @@
 Build the E2B sandbox template for the secret proxy.
 
 Usage:
-    E2B_API_KEY=... python build-template.py
+    E2B_API_KEY=... python proxy/build-template.py
 
+Run from the project root directory so that the copy() path resolves correctly.
 """
 
 from e2b import Template, wait_for_port, default_build_logger
 
 template = (
     Template()
-    .from_node_image("22")
+    .from_template("egress-header-template")
     .copy_items([
         {"src": "./secret-proxy.js", "dest": "/opt/proxy/secret-proxy.js"},
         {"src": "./start-proxy.sh", "dest": "/opt/proxy/start-proxy.sh"},
